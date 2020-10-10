@@ -1,0 +1,7 @@
+webform_zendesk.config.settings:
+  path: /admin/config/services/webform_zendesk
+  defaults:
+    _title: 'Zendesk API settings'
+    _form: \Drupal\webform_zendesk\Form\ZendeskAPISettingsForm
+  requirements:
+    _permission: 'administer site'

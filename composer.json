@@ -1,0 +1,26 @@
+{
+    "name": "wembassyco/webform_zendesk",
+    "type": "drupal-module",
+    "description": "Creates a new form submission handler for Webform to publish to Zendesk.",
+    "keywords": ["Drupal"],
+    "license": "GPL-2.0-or-later",
+    "homepage": "https://www.drupal.org/project/webform_zendesk",
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "config": {
+        "sort-packages": true
+    },
+    "support": {
+        "issues": "https://www.github.com/WembassyCo/webform_zendesk/issues",
+        "source": "https://www.github.com/WembassyCo/webform_zendesk"
+    },
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "https://packages.drupal.org/8"
+        }
+    ],
+    "require": {
+        "drupal/webform": "^1.0",
+    }
+}
