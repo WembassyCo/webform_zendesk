@@ -262,6 +262,7 @@ class ZenformHandler extends WebformHandlerBase {
       'sender_name' => '',
       'theme_name' => '',
       'parameters' => [],
+      'custom_fields_mapping' => '',
     ];
   }
 
@@ -526,7 +527,12 @@ class ZenformHandler extends WebformHandlerBase {
       '#title' => $this->t('Message'),
       '#open' => TRUE,
     ];
+
     $form['message'] += $this->buildElement('subject', $this->t('Subject'), $this->t('subject'), FALSE, $text_element_options_raw);
+    // Settings: Sender mail.
+    $form['message']['sender_mail'] = $this->buildElement('sender_mail', $this->t('Sender email'), $this->t('Sender email address'), TRUE, $mail_element_options, $options_element_options, NULL, $other_element_email_options);
+    // Settings: Sender name.
+    $form['message']['sender_name'] = $this->buildElement('sender_name', $this->t('Sender name'), $this->t('Sender name'), TRUE, $name_element_options, NULL, NULL, $other_element_name_options);
 
     $has_edit_twig_access = (WebformTwigExtension::hasEditTwigAccess() || $this->configuration['twig']);
 
@@ -661,7 +667,12 @@ class ZenformHandler extends WebformHandlerBase {
     ];
     // Tokens.
     $form['message']['token_tree_link'] = $this->buildTokenTreeElement();
-
+    $form['custom_fields_mapping'] = [
+      '#type' => 'textarea',
+      '#title' => $this->t('Custom Fields Mapping'),
+      '#description' => $this->t('Map custom fields from zendesk to webform.Add comma separated field mapping. The format should follow the pattern like webform_field_machine_name:zendesk_custom_field_id'),
+      '#default_value' => $this->configuration['custom_fields_mapping'],
+    ];
     // Elements.
     $form['elements'] = [
       '#type' => 'details',
@@ -786,10 +797,6 @@ class ZenformHandler extends WebformHandlerBase {
     $form['additional']['reply_to'] = $this->buildElement('reply_to', $this->t('Reply-to email'), $this->t('Reply-to email address'), FALSE, $mail_element_options, NULL, NULL, $other_element_email_options);
     // Settings: Return path.
     $form['additional']['return_path'] = $this->buildElement('return_path', $this->t('Return path'), $this->t('Return path email address'), FALSE, $mail_element_options, NULL, NULL, $other_element_email_options);
-    // Settings: Sender mail.
-    $form['additional']['sender_mail'] = $this->buildElement('sender_mail', $this->t('Sender email'), $this->t('Sender email address'), FALSE, $mail_element_options, $options_element_options, NULL, $other_element_email_options);
-    // Settings: Sender name.
-    $form['additional']['sender_name'] = $this->buildElement('sender_name', $this->t('Sender name'), $this->t('Sender name'), FALSE, $name_element_options, NULL, NULL, $other_element_name_options);
 
     // Settings: HTML.
     $form['additional']['html'] = [
@@ -857,12 +864,9 @@ class ZenformHandler extends WebformHandlerBase {
    */
   public function submitConfigurationForm(array &$form, FormStateInterface $form_state) {
     parent::submitConfigurationForm($form, $form_state);
-
     $values = $form_state->getValues();
-
     // Cleanup states.
     $values['states'] = array_values(array_filter($values['states']));
-
     foreach ($this->configuration as $name => $value) {
       if (isset($values[$name])) {
         // Convert options array to safe config array to prevent errors.
@@ -875,7 +879,6 @@ class ZenformHandler extends WebformHandlerBase {
         }
       }
     }
-
     // Cast debug.
     $this->configuration['debug'] = (bool) $this->configuration['debug'];
   }
@@ -891,8 +894,8 @@ class ZenformHandler extends WebformHandlerBase {
       // $this->sendMessage($webform_submission, $message);
       // Render body using webform email message (wrapper) template.
       $webform_raw_data = $webform_submission->getRawData();
-      $ticket_data['requester_name'] = $webform_raw_data['name'];
-      $ticket_data['requester_email'] = $webform_raw_data['email'];
+      $ticket_data['requester_name'] = $ticket_data['sender_name'];
+      $ticket_data['requester_email'] = $ticket_data['sender_mail'];
       $build = [
         '#theme' => 'webform_email_message_' . (($this->configuration['html']) ? 'html' : 'text'),
         '#message' => [
@@ -904,8 +907,24 @@ class ZenformHandler extends WebformHandlerBase {
       $theme_name = $this->configuration['theme_name'];
       $ticket_data['body'] = trim((string) $this->themeManager->renderPlain($build, $theme_name));
       $ticket_data['body'] = strip_tags($ticket_data['body']);
+      // Get custom fields data.
+      $custom_fields = $this->configuration['custom_fields_mapping'];
+      if (isset($custom_fields)) {
+        $fields = explode(',', $custom_fields);
+        if (!empty($fields)) {
+          $custom_fields_data = [];
+          foreach($fields as $key => $field) {
+            // Get field names.
+            $zendesk_fields = explode(':', $field);
+            $custom_fields_data[$key]['id'] = $zendesk_fields[1];
+            $custom_fields_data[$key]['value'] = $webform_raw_data[trim($zendesk_fields[0])];
+
+          }
+        }
+      }
+
       // Call zendesk api handler service.
-      \Drupal::service('webform_zendesk.api_helper')->createTicket($ticket_data);
+      \Drupal::service('webform_zendesk.api_helper')->createTicket($ticket_data, $custom_fields_data);
     }
   }
 
@@ -931,6 +950,7 @@ class ZenformHandler extends WebformHandlerBase {
     $token_options = [
       'email' => TRUE,
       'excluded_elements' => $this->configuration['excluded_elements'],
+      'custom_fields_mapping' => $this->configuration['custom_fields_mapping'],
       'ignore_access' => $this->configuration['ignore_access'],
       'exclude_empty' => $this->configuration['exclude_empty'],
       'exclude_empty_checkbox' => $this->configuration['exclude_empty_checkbox'],

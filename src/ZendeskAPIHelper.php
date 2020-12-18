@@ -49,7 +49,7 @@ class ZendeskAPIHelper {
   /**
    * Create ticket.
    */
-  public function createTicket($data) {
+  public function createTicket($data, $custom_fields_data = []) {
     $client = $this->apiAuth();
     // Get attachment uploads.
     $upload_token = [];
@@ -67,6 +67,7 @@ class ZendeskAPIHelper {
           'body' => $data['body'],
           'uploads' => $upload_token,
         ],
+        'custom_fields' => $custom_fields_data,
         'priority' => 'normal',
         'requester' => [
           'name' => $data['requester_name'],
