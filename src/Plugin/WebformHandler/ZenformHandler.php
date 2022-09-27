@@ -2,33 +2,22 @@
 
 namespace Drupal\webform_zendesk\Plugin\WebformHandler;
 
-use Drupal\Component\Render\FormattableMarkup;
-use Drupal\Component\Utility\Html;
-use Drupal\Core\Config\ConfigFactoryInterface;
-use Drupal\Core\Entity\EntityTypeManagerInterface;
-use Drupal\Core\Extension\ModuleHandlerInterface;
-use Drupal\Core\Form\FormStateInterface;
-use Drupal\Core\Language\LanguageManagerInterface;
-use Drupal\Core\Logger\LoggerChannelFactoryInterface;
-use Drupal\Core\Mail\MailManagerInterface;
-use Drupal\Core\Render\Markup;
-use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\Url;
-use Drupal\webform\Element\WebformAjaxElementTrait;
-use Drupal\webform\Element\WebformMessage;
-use Drupal\webform\Element\WebformSelectOther;
-use Drupal\webform\Plugin\WebformElement\WebformCompositeBase;
-use Drupal\webform\Plugin\WebformElementManagerInterface;
-use Drupal\webform\Plugin\WebformHandlerBase;
-use Drupal\webform\Twig\WebformTwigExtension;
+use Drupal\Core\Render\Markup;
 use Drupal\webform\Utility\Mail;
+use Drupal\Component\Utility\Html;
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\webform\Element\WebformMessage;
+use Drupal\webform\Twig\WebformTwigExtension;
+use Drupal\webform\Plugin\WebformHandlerBase;
+use Drupal\Component\Render\FormattableMarkup;
+use Drupal\webform\Element\WebformSelectOther;
+use Drupal\webform\WebformSubmissionInterface;
 use Drupal\webform\Utility\WebformElementHelper;
 use Drupal\webform\Utility\WebformOptionsHelper;
-use Drupal\webform\WebformSubmissionConditionsValidatorInterface;
-use Drupal\webform\WebformSubmissionInterface;
-use Drupal\webform\WebformThemeManagerInterface;
-use Drupal\webform\WebformTokenManagerInterface;
+use Drupal\webform\Element\WebformAjaxElementTrait;
 use Symfony\Component\DependencyInjection\ContainerInterface;
+use Drupal\webform\Plugin\WebformElement\WebformCompositeBase;
 
 /**
  * Create a new zendesk issue from a webform submission.
@@ -135,37 +124,19 @@ class ZenformHandler extends WebformHandlerBase {
   /**
    * {@inheritdoc}
    */
-  public function __construct(array $configuration, $plugin_id, $plugin_definition, LoggerChannelFactoryInterface $logger_factory, ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager, WebformSubmissionConditionsValidatorInterface $conditions_validator, AccountInterface $current_user, ModuleHandlerInterface $module_handler, LanguageManagerInterface $language_manager, MailManagerInterface $mail_manager, WebformThemeManagerInterface $theme_manager, WebformTokenManagerInterface $token_manager, WebformElementManagerInterface $element_manager) {
-    parent::__construct($configuration, $plugin_id, $plugin_definition, $logger_factory, $config_factory, $entity_type_manager, $conditions_validator);
-    $this->currentUser = $current_user;
-    $this->moduleHandler = $module_handler;
-    $this->languageManager = $language_manager;
-    $this->mailManager = $mail_manager;
-    $this->themeManager = $theme_manager;
-    $this->tokenManager = $token_manager;
-    $this->elementManager = $element_manager;
-  }
-
-  /**
-   * {@inheritdoc}
-   */
   public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition) {
-    return new static(
-      $configuration,
-      $plugin_id,
-      $plugin_definition,
-      $container->get('logger.factory'),
-      $container->get('config.factory'),
-      $container->get('entity_type.manager'),
-      $container->get('webform_submission.conditions_validator'),
-      $container->get('current_user'),
-      $container->get('module_handler'),
-      $container->get('language_manager'),
-      $container->get('plugin.manager.mail'),
-      $container->get('webform.theme_manager'),
-      $container->get('webform.token_manager'),
-      $container->get('plugin.manager.webform.element')
-    );
+    $instance = parent::create($container, $configuration, $plugin_id, $plugin_definition);
+
+    $instance->currentUser = $container->get('current_user');
+    $instance->moduleHandler = $container->get('module_handler');
+    $instance->languageManager = $container->get('language_manager');
+    $instance->mailManager = $container->get('plugin.manager.mail');
+    $instance->themeManager = $container->get('webform.theme_manager');
+    $instance->tokenManager = $container->get('webform.token_manager');
+    $instance->elementManager = $container->get('plugin.manager.webform.element');
+    $instance->configFactory = $container->get('config.factory');
+
+    return $instance;
   }
 
   /**
@@ -196,10 +167,11 @@ class ZenformHandler extends WebformHandlerBase {
       WebformSubmissionInterface::STATE_UPDATED => $this->t('Updated'),
       WebformSubmissionInterface::STATE_DELETED => $this->t('Deleted'),
     ];
-    $settings['states'] = array_intersect_key($states, array_combine($settings['states'], $settings['states']));
+    $existing_states = $settings['states'] ?? [];
+    $settings['states'] = array_intersect_key($states, array_combine($existing_states, $existing_states));
 
     // Set theme name.
-    if ($settings['theme_name']) {
+    if (isset($settings['theme_name']) && $settings['theme_name']) {
       $settings['theme_name'] = $this->themeManager->getThemeName($settings['theme_name']);
     }
 
@@ -279,7 +251,7 @@ class ZenformHandler extends WebformHandlerBase {
 
     $webform_settings = $this->configFactory->get('webform.settings');
     $site_settings = $this->configFactory->get('system.site');
-    $body_format = ($this->configuration['html']) ? 'html' : 'text';
+    $body_format = (isset($this->configuration['html']) && !empty($this->configuration['html'])) ? 'html' : 'text';
     $default_to_mail = $webform_settings->get('mail.default_to_mail') ?: $site_settings->get('mail') ?: ini_get('sendmail_from');
     $default_from_mail = $webform_settings->get('mail.default_from_mail') ?: $site_settings->get('mail') ?: ini_get('sendmail_from');
 
@@ -330,8 +302,10 @@ class ZenformHandler extends WebformHandlerBase {
   public function getEmailConfiguration() {
     $configuration = $this->getConfiguration();
     $email = [];
-    foreach ($configuration['settings'] as $key => $value) {
-      $email[$key] = ($value === static::DEFAULT_VALUE) ? $this->getDefaultConfigurationValue($key) : $value;
+    if (isset($configuration['settings']) && !empty($configuration['settings'])) {
+      foreach ($configuration['settings'] as $key => $value) {
+        $email[$key] = ($value === static::DEFAULT_VALUE) ? $this->getDefaultConfigurationValue($key) : $value;
+      }
     }
     return $email;
   }
@@ -350,98 +324,102 @@ class ZenformHandler extends WebformHandlerBase {
     $options_element_options = [];
 
     $elements = $this->webform->getElementsInitializedAndFlattened();
-    foreach ($elements as $element_key => $element) {
-      $element_plugin = $this->elementManager->getElementInstance($element);
-      if (!$element_plugin->isInput($element) || !isset($element['#type'])) {
-        continue;
-      }
-
-      // Set title.
-      $element_title = (isset($element['#title'])) ? new FormattableMarkup('@title (@key)', [
-        '@title' => $element['#title'],
-        '@key' => $element_key,
-      ]) : $element_key;
-
-      // Add options element token, which can include multiple values.
-      if (isset($element['#options'])) {
-        $options_element_options["[webform_submission:values:$element_key:raw]"] = $element_title;
-      }
-
-      // Multiple value elements can NOT be used as a tokens.
-      if ($element_plugin->hasMultipleValues($element)) {
-        continue;
-      }
-
-      if (!$element_plugin->isComposite()) {
-        // Add text element value and raw tokens.
-        $text_element_options_value["[webform_submission:values:$element_key:value]"] = $element_title;
-        $text_element_options_raw["[webform_submission:values:$element_key:raw]"] = $element_title;
-
-        // Add name element token.
-        $name_element_options["[webform_submission:values:$element_key:raw]"] = $element_title;
-
-        // Add mail element token.
-        $element_array = [
-          'email',
-          'hidden',
-          'value',
-          'textfield',
-          'webform_email_multiple',
-          'webform_email_confirm',
-        ];
-        if (in_array($element['#type'], $element_array)) {
-          $mail_element_options["[webform_submission:values:$element_key:raw]"] = $element_title;
+    if (!empty($elements)) {
+      foreach ($elements as $element_key => $element) {
+        $element_plugin = $this->elementManager->getElementInstance($element);
+        if (!$element_plugin->isInput($element) || !isset($element['#type'])) {
+          continue;
         }
-      }
 
-      // Element type specific tokens.
-      switch ($element['#type']) {
-        case 'webform_name':
-          // Allow 'webform_name' composite to be used a value token.
-          $name_element_options["[webform_submission:values:$element_key:value]"] = $element_title;
-          break;
+        // Set title.
+        $element_title = (isset($element['#title'])) ? new FormattableMarkup('@title (@key)', [
+          '@title' => $element['#title'],
+          '@key' => $element_key,
+        ]) : $element_key;
 
-        case 'text_format':
-          // Allow 'text_format' composite to be used a value token.
-          $text_element_options_value["[webform_submission:values:$element_key]"] = $element_title;
-          break;
-      }
+        // Add options element token, which can include multiple values.
+        if (isset($element['#options'])) {
+          $options_element_options["[webform_submission:values:$element_key:raw]"] = $element_title;
+        }
 
-      // Handle composite sub elements.
-      if ($element_plugin instanceof WebformCompositeBase) {
-        $composite_elements = $element_plugin->getCompositeElements();
-        foreach ($composite_elements as $composite_key => $composite_element) {
-          $composite_element_plugin = $this->elementManager->getElementInstance($element);
-          if (!$composite_element_plugin->isInput($element) || !isset($composite_element['#type'])) {
-            continue;
-          }
+        // Multiple value elements can NOT be used as a tokens.
+        if ($element_plugin->hasMultipleValues($element)) {
+          continue;
+        }
 
-          // Set composite title.
-          if (isset($element['#title'])) {
-            $f_args = [
-              '@title' => $element['#title'],
-              '@composite_title' => $composite_element['#title'],
-              '@key' => $element_key,
-              '@composite_key' => $composite_key,
-            ];
-            $composite_title = new FormattableMarkup('@title: @composite_title (@key: @composite_key)', $f_args);
-          }
-          else {
-            $composite_title = "$element_key:$composite_key";
-          }
+        if (!$element_plugin->isComposite()) {
+          // Add text element value and raw tokens.
+          $text_element_options_value["[webform_submission:values:$element_key:value]"] = $element_title;
+          $text_element_options_raw["[webform_submission:values:$element_key:raw]"] = $element_title;
 
           // Add name element token.
-          // Only applies to basic (not composite) elements.
-          $name_element_options["[webform_submission:values:$element_key:$composite_key:raw]"] = $composite_title;
+          $name_element_options["[webform_submission:values:$element_key:raw]"] = $element_title;
 
           // Add mail element token.
-          $composit_element_array = [
+          $element_array = [
             'email',
+            'hidden',
+            'value',
+            'textfield',
             'webform_email_multiple',
             'webform_email_confirm',
           ];
-          if (in_array($composite_element['#type'], $composit_element_array)) {
-            $mail_element_options["[webform_submission:values:$element_key:$composite_key:raw]"] = $composite_title;
+          if (in_array($element['#type'], $element_array)) {
+            $mail_element_options["[webform_submission:values:$element_key:raw]"] = $element_title;
+          }
+        }
+
+        // Element type specific tokens.
+        switch ($element['#type']) {
+          case 'webform_name':
+            // Allow 'webform_name' composite to be used a value token.
+            $name_element_options["[webform_submission:values:$element_key:value]"] = $element_title;
+            break;
+
+          case 'text_format':
+            // Allow 'text_format' composite to be used a value token.
+            $text_element_options_value["[webform_submission:values:$element_key]"] = $element_title;
+            break;
+        }
+
+        // Handle composite sub elements.
+        if ($element_plugin instanceof WebformCompositeBase) {
+          $composite_elements = $element_plugin->getCompositeElements();
+          if (!empty($composite_elements)) {
+            foreach ($composite_elements as $composite_key => $composite_element) {
+              $composite_element_plugin = $this->elementManager->getElementInstance($element);
+              if (!$composite_element_plugin->isInput($element) || !isset($composite_element['#type'])) {
+                continue;
+              }
+
+              // Set composite title.
+              if (isset($element['#title'])) {
+                $f_args = [
+                  '@title' => $element['#title'],
+                  '@composite_title' => $composite_element['#title'],
+                  '@key' => $element_key,
+                  '@composite_key' => $composite_key,
+                ];
+                $composite_title = new FormattableMarkup('@title: @composite_title (@key: @composite_key)', $f_args);
+              }
+              else {
+                $composite_title = "$element_key:$composite_key";
+              }
+
+              // Add name element token.
+              // Only applies to basic (not composite) elements.
+              $name_element_options["[webform_submission:values:$element_key:$composite_key:raw]"] = $composite_title;
+
+              // Add mail element token.
+              $composit_element_array = [
+                'email',
+                'webform_email_multiple',
+                'webform_email_confirm',
+              ];
+              if (in_array($composite_element['#type'], $composit_element_array)) {
+                $mail_element_options["[webform_submission:values:$element_key:$composite_key:raw]"] = $composite_title;
+              }
+            }
           }
         }
       }
@@ -454,11 +432,13 @@ class ZenformHandler extends WebformHandlerBase {
       if (!in_array('authenticated', $roles)) {
         $role_names = array_intersect_key($role_names, array_combine($roles, $roles));
       }
-      foreach ($role_names as $role_name => $role_label) {
-        $roles_element_options["[webform_role:$role_name]"] = new FormattableMarkup('@title (@key)', [
-          '@title' => $role_label,
-          '@key' => $role_name,
-        ]);
+      if (!empty($role_names)) {
+        foreach ($role_names as $role_name => $role_label) {
+          $roles_element_options["[webform_role:$role_name]"] = new FormattableMarkup('@title (@key)', [
+            '@title' => $role_label,
+            '@key' => $role_name,
+          ]);
+        }
       }
     }
 
@@ -485,12 +465,19 @@ class ZenformHandler extends WebformHandlerBase {
     $form['#attributes']['novalidate'] = 'novalidate';
 
     // To.
-    //$form['to'] = [
-    //  '#type' => 'fieldgroup',
-    //  '#title' => $this->t('Zendesk Integration'),
-    //  '#open' => FALSE,
-    //];
-    //$form['to']['to_mail'] = $this->buildElement('to_mail', $this->t('To email'), $this->t('To email address'), TRUE, $mail_element_options, $options_element_options, $roles_element_options, $other_element_email_options);
+    // $form['to'] = [
+    // '#type' => 'fieldgroup',
+    // '#title' => $this->t('Zendesk Integration'),
+    // '#open' => FALSE,
+    // ];
+    // $form['to']['to_mail'] = $this->buildElement(
+    // 'to_mail',
+    // $this->t('To email'),
+    // $this->t('To email address'),
+    // TRUE, $mail_element_options,
+    // $options_element_options,
+    // $roles_element_options,
+    // $other_element_email_options);.
     $token_types = ['webform', 'webform_submission'];
     // Show webform role tokens if they have been specified.
     if (!empty($roles_element_options)) {
@@ -534,7 +521,7 @@ class ZenformHandler extends WebformHandlerBase {
     // Settings: Sender name.
     $form['message']['sender_name'] = $this->buildElement('sender_name', $this->t('Sender name'), $this->t('Sender name'), TRUE, $name_element_options, NULL, NULL, $other_element_name_options);
 
-    $has_edit_twig_access = (WebformTwigExtension::hasEditTwigAccess() || $this->configuration['twig']);
+    $has_edit_twig_access = (WebformTwigExtension::hasEditTwigAccess() || $this->configuration['twig'] ?? '');
 
     // Message: Body.
     // Building a custom select other element that toggles between
@@ -549,7 +536,7 @@ class ZenformHandler extends WebformHandlerBase {
     $body_options[(string) $this->t('Elements')] = $text_element_options_value;
 
     // Get default format.
-    $body_default_format = ($this->configuration['html']) ? 'html' : 'text';
+    $body_default_format = (isset($this->configuration['html']) && !empty($this->configuration['html'])) ? 'html' : 'text';
 
     // Get default values.
     $body_default_values = $this->getBodyDefaultValues();
@@ -566,16 +553,16 @@ class ZenformHandler extends WebformHandlerBase {
 
     // Look at the 'body' and determine the body select and custom
     // default values.
-    if (WebformOptionsHelper::hasOption($this->configuration['body'], $body_options)) {
+    if (isset($this->configuration['body']) && WebformOptionsHelper::hasOption($this->configuration['body'], $body_options)) {
       $body_select_default_value = $this->configuration['body'];
     }
-    elseif ($this->configuration['twig']) {
+    elseif (isset($this->configuration['twig'])) {
       $body_select_default_value = 'twig';
       $body_custom_default_values['twig'] = $this->configuration['body'];
     }
     else {
       $body_select_default_value = WebformSelectOther::OTHER_OPTION;
-      $body_custom_default_values[$body_default_format] = $this->configuration['body'];
+      $body_custom_default_values[$body_default_format] = $this->configuration['body'] ?? '';
     }
 
     // Build body select menu.
@@ -586,56 +573,58 @@ class ZenformHandler extends WebformHandlerBase {
       '#required' => TRUE,
       '#default_value' => $body_select_default_value,
     ];
-    foreach ($body_default_values as $format => $default_value) {
-      if ($format === 'html') {
-        $form['message']['body_custom_' . $format] = [
-          '#type' => 'webform_html_editor',
-          '#format' => $this->configFactory->get('webform.settings')->get('html_editor.mail_format'),
+    if (!empty($body_default_values)) {
+      foreach ($body_default_values as $format => $default_value) {
+        if ($format === 'html') {
+          $form['message']['body_custom_' . $format] = [
+            '#type' => 'webform_html_editor',
+            '#format' => $this->configFactory->get('webform.settings')->get('html_editor.mail_format'),
+          ];
+        }
+        else {
+          $form['message']['body_custom_' . $format] = [
+            '#type' => 'webform_codemirror',
+            '#mode' => $format,
+          ];
+        }
+        $form['message']['body_custom_' . $format] += [
+          '#title' => $this->t('Body custom value (@format)', ['@format' => $format]),
+          '#title_display' => 'hidden',
+          '#default_value' => $body_custom_default_values[$format],
+          '#states' => [
+            'visible' => [
+              ':input[name="settings[body]"]' => ['value' => WebformSelectOther::OTHER_OPTION],
+              ':input[name="settings[html]"]' => ['checked' => ($format === 'html') ? TRUE : FALSE],
+            ],
+            'required' => [
+              ':input[name="settings[body]"]' => ['value' => WebformSelectOther::OTHER_OPTION],
+              ':input[name="settings[html]"]' => ['checked' => ($format === 'html') ? TRUE : FALSE],
+            ],
+          ],
         ];
-      }
-      else {
-        $form['message']['body_custom_' . $format] = [
+        // Must set #parents because body_custom_* is not a configuration value.
+        // @see \Drupal\webform\Plugin\WebformHandler\EmailWebformHandler::validateConfigurationForm
+        $form['message']['body_custom_' . $format]['#parents'] = [
+          'settings',
+          'body_custom_' . $format,
+        ];
+
+        // Default body.
+        $form['message']['body_default_' . $format] = [
           '#type' => 'webform_codemirror',
           '#mode' => $format,
+          '#title' => $this->t('Body default value (@format)', ['@format' => $format]),
+          '#title_display' => 'hidden',
+          '#default_value' => $body_default_values[$format],
+          '#attributes' => ['readonly' => 'readonly', 'disabled' => 'disabled'],
+          '#states' => [
+            'visible' => [
+              ':input[name="settings[body]"]' => ['value' => static::DEFAULT_VALUE],
+              ':input[name="settings[html]"]' => ['checked' => ($format === 'html') ? TRUE : FALSE],
+            ],
+          ],
         ];
       }
-      $form['message']['body_custom_' . $format] += [
-        '#title' => $this->t('Body custom value (@format)', ['@format' => $format]),
-        '#title_display' => 'hidden',
-        '#default_value' => $body_custom_default_values[$format],
-        '#states' => [
-          'visible' => [
-            ':input[name="settings[body]"]' => ['value' => WebformSelectOther::OTHER_OPTION],
-            ':input[name="settings[html]"]' => ['checked' => ($format === 'html') ? TRUE : FALSE],
-          ],
-          'required' => [
-            ':input[name="settings[body]"]' => ['value' => WebformSelectOther::OTHER_OPTION],
-            ':input[name="settings[html]"]' => ['checked' => ($format === 'html') ? TRUE : FALSE],
-          ],
-        ],
-      ];
-      // Must set #parents because body_custom_* is not a configuration value.
-      // @see \Drupal\webform\Plugin\WebformHandler\EmailWebformHandler::validateConfigurationForm
-      $form['message']['body_custom_' . $format]['#parents'] = [
-        'settings',
-        'body_custom_' . $format,
-      ];
-
-      // Default body.
-      $form['message']['body_default_' . $format] = [
-        '#type' => 'webform_codemirror',
-        '#mode' => $format,
-        '#title' => $this->t('Body default value (@format)', ['@format' => $format]),
-        '#title_display' => 'hidden',
-        '#default_value' => $body_default_values[$format],
-        '#attributes' => ['readonly' => 'readonly', 'disabled' => 'disabled'],
-        '#states' => [
-          'visible' => [
-            ':input[name="settings[body]"]' => ['value' => static::DEFAULT_VALUE],
-            ':input[name="settings[html]"]' => ['checked' => ($format === 'html') ? TRUE : FALSE],
-          ],
-        ],
-      ];
     }
     // Twig body with help.
     $form['message']['body_custom_twig'] = [
@@ -671,65 +660,67 @@ class ZenformHandler extends WebformHandlerBase {
       '#type' => 'textarea',
       '#title' => $this->t('Custom Fields Mapping'),
       '#description' => $this->t('Map custom fields from zendesk to webform.Add comma separated field mapping. The format should follow the pattern like webform_field_machine_name:zendesk_custom_field_id'),
-      '#default_value' => $this->configuration['custom_fields_mapping'],
+      '#default_value' => $this->configuration['custom_fields_mapping'] ?? '',
     ];
     // Elements.
     $form['elements'] = [
       '#type' => 'details',
       '#title' => $this->t('Included email values/markup'),
       '#description' => $this->t('The selected elements will be included in the [webform_submission:values] token. Individual values may still be printed if explicitly specified as a [webform_submission:values:?] in the email body template.'),
-      '#open' => $this->configuration['excluded_elements'] ? TRUE : FALSE,
+      '#open' => (isset($this->configuration['excluded_elements']) && !empty($this->configuration['excluded_elements'])) ? TRUE : FALSE,
     ];
     $form['elements']['excluded_elements'] = [
       '#type' => 'webform_excluded_elements',
       '#exclude_markup' => FALSE,
       '#webform_id' => $this->webform->id(),
-      '#default_value' => $this->configuration['excluded_elements'],
+      '#default_value' => $this->configuration['excluded_elements'] ?? '',
     ];
     $form['elements']['ignore_access'] = [
       '#type' => 'checkbox',
       '#title' => $this->t('Always include elements with private and restricted access'),
       '#description' => $this->t('If checked, access controls for included element will be ignored.'),
       '#return_value' => TRUE,
-      '#default_value' => $this->configuration['ignore_access'],
+      '#default_value' => $this->configuration['ignore_access'] ?? '',
     ];
     $form['elements']['exclude_empty'] = [
       '#type' => 'checkbox',
       '#title' => $this->t('Exclude empty elements'),
       '#description' => $this->t('If checked, empty elements will be excluded from the email values.'),
       '#return_value' => TRUE,
-      '#default_value' => $this->configuration['exclude_empty'],
+      '#default_value' => $this->configuration['exclude_empty'] ?? '',
     ];
     $form['elements']['exclude_empty_checkbox'] = [
       '#type' => 'checkbox',
       '#title' => $this->t('Exclude unselected checkboxes'),
       '#description' => $this->t('If checked, empty checkboxes will be excluded from the email values.'),
       '#return_value' => TRUE,
-      '#default_value' => $this->configuration['exclude_empty_checkbox'],
+      '#default_value' => $this->configuration['exclude_empty_checkbox'] ?? '',
     ];
     $form['elements']['exclude_attachments'] = [
       '#type' => 'checkbox',
       '#title' => $this->t('Exclude file elements with attachments'),
       '#return_value' => TRUE,
       '#description' => $this->t('If checked, file attachments will be excluded from the email values, but the selected element files will still be attached to the email.'),
-      '#default_value' => $this->configuration['exclude_attachments'],
+      '#default_value' => $this->configuration['exclude_attachments'] ?? '',
       '#access' => $this->getWebform()->hasAttachments(),
       '#states' => [
         'visible' => [':input[name="settings[attachments]"]' => ['checked' => TRUE]],
       ],
     ];
     $elements = $this->webform->getElementsInitializedFlattenedAndHasValue();
-    foreach ($elements as $element) {
-      if (!empty($element['#access_view_roles']) || !empty($element['#private'])) {
-        $form['elements']['ignore_access_message'] = [
-          '#type' => 'webform_message',
-          '#message_message' => $this->t('This webform contains private and/or restricted access elements, which will only be included if the user submitting the form has access to these elements.'),
-          '#message_type' => 'warning',
-          '#states' => [
-            'visible' => [':input[name="settings[ignore_access]"]' => ['checked' => FALSE]],
-          ],
-        ];
-        break;
+    if (!empty($elements)) {
+      foreach ($elements as $element) {
+        if (!empty($element['#access_view_roles']) || !empty($element['#private'])) {
+          $form['elements']['ignore_access_message'] = [
+            '#type' => 'webform_message',
+            '#message_message' => $this->t('This webform contains private and/or restricted access elements, which will only be included if the user submitting the form has access to these elements.'),
+            '#message_type' => 'warning',
+            '#states' => [
+              'visible' => [':input[name="settings[ignore_access]"]' => ['checked' => FALSE]],
+            ],
+          ];
+          break;
+        }
       }
     }
 
@@ -758,7 +749,7 @@ class ZenformHandler extends WebformHandlerBase {
       '#title' => $this->t('Include files as attachments'),
       '#description' => $this->t('If checked, only file upload elements selected in the above included email values will be attached to the email.'),
       '#return_value' => TRUE,
-      '#default_value' => $this->configuration['attachments'],
+      '#default_value' => $this->configuration['attachments'] ?? '',
     ];
 
     // Additional.
@@ -781,7 +772,7 @@ class ZenformHandler extends WebformHandlerBase {
         WebformSubmissionInterface::STATE_LOCKED => $this->t('…when <b>submission is locked</b>.'),
       ],
       '#access' => $results_disabled ? FALSE : TRUE,
-      '#default_value' => $results_disabled ? [WebformSubmissionInterface::STATE_COMPLETED] : $this->configuration['states'],
+      '#default_value' => $results_disabled ? [WebformSubmissionInterface::STATE_COMPLETED] : ($this->configuration['states'] ?? []),
     ];
     $form['additional']['states_message'] = [
       '#type' => 'webform_message',
@@ -804,7 +795,7 @@ class ZenformHandler extends WebformHandlerBase {
       '#title' => $this->t('Send email as HTML'),
       '#return_value' => TRUE,
       '#access' => $this->supportsHtml(),
-      '#default_value' => $this->configuration['html'],
+      '#default_value' => $this->configuration['html'] ?? '',
     ];
 
     // Setting: Themes.
@@ -813,7 +804,7 @@ class ZenformHandler extends WebformHandlerBase {
       '#title' => $this->t('Theme to render this email'),
       '#description' => $this->t('Select the theme that will be used to render this email.'),
       '#options' => $this->themeManager->getThemeNames(),
-      '#default_value' => $this->configuration['theme_name'],
+      '#default_value' => $this->configuration['theme_name'] ?? '',
     ];
 
     $form['additional']['parameters'] = [
@@ -821,7 +812,7 @@ class ZenformHandler extends WebformHandlerBase {
       '#mode' => 'yaml',
       '#title' => $this->t('Custom parameters'),
       '#description' => $this->t('Enter additional custom parameters to be appended to the email message\'s parameters. Custom parameters are used by <a href=":href">email related add-on modules</a>.', [':href' => 'https://www.drupal.org/docs/8/modules/webform/webform-add-ons#mail']),
-      '#default_value' => $this->configuration['parameters'],
+      '#default_value' => $this->configuration['parameters'] ?? '',
     ];
 
     // ISSUE: TranslatableMarkup is breaking the #ajax.
@@ -880,7 +871,7 @@ class ZenformHandler extends WebformHandlerBase {
       }
     }
     // Cast debug.
-    $this->configuration['debug'] = (bool) $this->configuration['debug'];
+    $this->configuration['debug'] = (bool) $this->configuration['debug'] ?? FALSE;
   }
 
   /**
@@ -894,6 +885,7 @@ class ZenformHandler extends WebformHandlerBase {
       // $this->sendMessage($webform_submission, $message);
       // Render body using webform email message (wrapper) template.
       $webform_raw_data = $webform_submission->getRawData();
+      $ticket_data['user_data'] = $this->buildUserData($webform_submission);
       $ticket_data['requester_name'] = $ticket_data['sender_name'];
       $ticket_data['requester_email'] = $ticket_data['sender_mail'];
       $build = [
@@ -909,16 +901,21 @@ class ZenformHandler extends WebformHandlerBase {
       $ticket_data['body'] = strip_tags($ticket_data['body']);
       // Get custom fields data.
       $custom_fields = $this->configuration['custom_fields_mapping'];
+      $custom_fields_data = [];
       if (isset($custom_fields)) {
         $fields = explode(',', $custom_fields);
         if (!empty($fields)) {
-          $custom_fields_data = [];
-          foreach($fields as $key => $field) {
-            // Get field names.
-            $zendesk_fields = explode(':', $field);
-            $custom_fields_data[$key]['id'] = $zendesk_fields[1];
-            $custom_fields_data[$key]['value'] = $webform_raw_data[trim($zendesk_fields[0])];
-
+          if (!empty($fields)) {
+            foreach ($fields as $key => $field) {
+              // Get field names.
+              $zendesk_fields = explode(':', $field);
+              if (isset($zendesk_fields[1])) {
+                $custom_fields_data[$key]['id'] = $zendesk_fields[1];
+              }
+              if (isset($zendesk_fields[0])) {
+                $custom_fields_data[$key]['value'] = $webform_raw_data[trim($zendesk_fields[0])];
+              }
+            }
           }
         }
       }
@@ -932,7 +929,7 @@ class ZenformHandler extends WebformHandlerBase {
    * {@inheritdoc}
    */
   public function postDelete(WebformSubmissionInterface $webform_submission) {
-    if (in_array(WebformSubmissionInterface::STATE_DELETED, $this->configuration['states'])) {
+    if (isset($this->configuration['states']) && in_array(WebformSubmissionInterface::STATE_DELETED, $this->configuration['states'])) {
       $message = $this->getMessage($webform_submission);
       $this->sendMessage($webform_submission, $message);
     }
@@ -963,56 +960,59 @@ class ZenformHandler extends WebformHandlerBase {
     $message = [];
 
     // Copy configuration to $message.
-    foreach ($this->configuration as $configuration_key => $configuration_value) {
-      // Get configuration name (to, cc, bcc, from, name, subject, mail)
-      // and type (mail, options, or text).
-      list($configuration_name, $configuration_type) = (strpos($configuration_key, '_') !== FALSE) ? explode('_', $configuration_key) : [
-        $configuration_key,
-        'text',
-      ];
+    if (!empty($this->configuration)) {
+      foreach ($this->configuration as $configuration_key => $configuration_value) {
+        // Get configuration name (to, cc, bcc, from, name, subject, mail)
+        // and type (mail, options, or text).
+        [$configuration_name, $configuration_type] = (strpos($configuration_key, '_') !== FALSE) ? explode('_', $configuration_key) : [
+          $configuration_key,
+          'text',
+        ];
 
-      // Set options and continue.
-      if ($configuration_type === 'options') {
-        $message[$configuration_key] = $configuration_value;
-        continue;
-      }
-
-      // Determine if configuration value set to '_default'.
-      $is_default_configuration = ($configuration_value === static::DEFAULT_VALUE);
-      // Determine if configuration value should use global configuration.
-      $is_global_configuration = in_array($configuration_key, [
-        'reply_to',
-        'return_path',
-        'sender_mail',
-        'sender_name',
-      ]);
-      if ($is_default_configuration || (!$configuration_value && $is_global_configuration)) {
-        $configuration_value = $this->getDefaultConfigurationValue($configuration_key);
-      }
-
-      // Set email addresses.
-      if ($configuration_type === 'mail') {
-        $emails = $this->getMessageEmails($webform_submission, $configuration_name, $configuration_value);
-        $configuration_value = implode(',', array_unique($emails));
-      }
-
-      // If Twig enabled render and body, render the Twig template.
-      if ($configuration_key === 'body' && $this->configuration['twig']) {
-        $message[$configuration_key] = WebformTwigExtension::renderTwigTemplate($webform_submission, $configuration_value, $token_options);
-      }
-      else {
-        // Clear tokens from email values.
-        $token_options['clear'] = (strpos($configuration_key, '_mail') !== FALSE) ? TRUE : FALSE;
-
-        // Get replace token values.
-        $token_value = $this->replaceTokens($configuration_value, $webform_submission, $token_data, $token_options);
-
-        // Decode entities for all message values except the HTML message body.
-        if (!empty($token_value) && is_string($token_value) && !($token_options['html'] && $configuration_key === 'body')) {
-          $token_value = Html::decodeEntities($token_value);
+        // Set options and continue.
+        if ($configuration_type === 'options') {
+          $message[$configuration_key] = $configuration_value;
+          continue;
         }
 
-        $message[$configuration_key] = $token_value;
+        // Determine if configuration value set to '_default'.
+        $is_default_configuration = ($configuration_value === static::DEFAULT_VALUE);
+        // Determine if configuration value should use global configuration.
+        $is_global_configuration = in_array($configuration_key, [
+          'reply_to',
+          'return_path',
+          'sender_mail',
+          'sender_name',
+        ]);
+        if ($is_default_configuration || (!$configuration_value && $is_global_configuration)) {
+          $configuration_value = $this->getDefaultConfigurationValue($configuration_key);
+        }
+
+        // Set email addresses.
+        if ($configuration_type === 'mail') {
+          $emails = $this->getMessageEmails($webform_submission, $configuration_name, $configuration_value);
+          $configuration_value = implode(',', array_unique($emails));
+        }
+
+        // If Twig enabled render and body, render the Twig template.
+        if ($configuration_key === 'body' && $this->configuration['twig']) {
+          $message[$configuration_key] = WebformTwigExtension::renderTwigTemplate($webform_submission, $configuration_value, $token_options);
+        }
+        else {
+          // Clear tokens from email values.
+          $token_options['clear'] = (strpos($configuration_key, '_mail') !== FALSE) ? TRUE : FALSE;
+
+          // Get replace token values.
+          $token_value = $this->replaceTokens($configuration_value, $webform_submission, $token_data, $token_options);
+
+          // Decode entities for all message values except the
+          // HTML message body.
+          if (!empty($token_value) && is_string($token_value) && !($token_options['html'] && $configuration_key === 'body')) {
+            $token_value = Html::decodeEntities($token_value);
+          }
+
+          $message[$configuration_key] = $token_value;
+        }
       }
     }
 
@@ -1099,13 +1099,15 @@ class ZenformHandler extends WebformHandlerBase {
       }
       // Loop through options values and collect email addresses.
       else {
-        foreach ($options_values as $option_value) {
-          if (!empty($email_options[$option_value])) {
-            $emails[] = $email_options[$option_value];
-          }
-          // Set other email address.
-          elseif (!empty($email_options[static::OTHER_OPTION])) {
-            $emails[] = $email_options[static::OTHER_OPTION];
+        if (!empty($options_values)) {
+          foreach ($options_values as $option_value) {
+            if (!empty($email_options[$option_value])) {
+              $emails[] = $email_options[$option_value];
+            }
+            // Set other email address.
+            elseif (!empty($email_options[static::OTHER_OPTION])) {
+              $emails[] = $email_options[static::OTHER_OPTION];
+            }
           }
         }
       }
@@ -1160,11 +1162,15 @@ class ZenformHandler extends WebformHandlerBase {
     $attachments = [];
     $elements = $this->getWebform()->getElementsInitializedAndFlattened();
     $element_attachments = $this->getWebform()->getElementsAttachments();
-    foreach ($element_attachments as $element_attachment) {
-      $element = $elements[$element_attachment];
-      /** @var \Drupal\webform\Plugin\WebformElementAttachmentInterface $element_plugin */
-      $element_plugin = $this->elementManager->getElementInstance($element);
-      $attachments = array_merge($attachments, $element_plugin->getAttachments($element, $webform_submission));
+    if (!empty($element_attachments)) {
+      foreach ($element_attachments as $element_attachment) {
+        $element = $elements[$element_attachment];
+        /** @var \Drupal\webform\Plugin\WebformElementAttachmentInterface $element_plugin */
+        $element_plugin = $this->elementManager->getElementInstance($element);
+        if (!empty($element_plugin) && method_exists($element_plugin, getAttachments)) {
+          $attachments = array_merge($attachments, $element_plugin->getAttachments($element, $webform_submission));
+        }
+      }
     }
     return $attachments;
   }
@@ -1439,22 +1445,24 @@ class ZenformHandler extends WebformHandlerBase {
       '---' => '---',
       'subject' => $this->t('Subject'),
     ];
-    foreach ($values as $name => $title) {
-      if ($title === '---') {
-        $build[$name] = ['#markup' => '<hr />'];
-      }
-      elseif (!empty($message[$name])) {
-        $build[$name] = [
-          '#type' => 'item',
-          '#title' => $title,
-          '#markup' => $message[$name],
-          '#wrapper_attributes' => [
-            'class' => [
-              'container-inline',
+    if (!empty($values)) {
+      foreach ($values as $name => $title) {
+        if ($title === '---') {
+          $build[$name] = ['#markup' => '<hr />'];
+        }
+        elseif (!empty($message[$name])) {
+          $build[$name] = [
+            '#type' => 'item',
+            '#title' => $title,
+            '#markup' => $message[$name],
+            '#wrapper_attributes' => [
+              'class' => [
+                'container-inline',
+              ],
+              'style' => 'margin: 0',
             ],
-            'style' => 'margin: 0',
-          ],
-        ];
+          ];
+        }
       }
     }
     // Body.
@@ -1539,8 +1547,8 @@ class ZenformHandler extends WebformHandlerBase {
    * @return array
    *   A select other element.
    */
-  protected function buildElement($name, $title, $label, $required = FALSE, array $element_options, array $options_options = NULL, array $role_options = NULL, array $other_options = NULL) {
-    list($element_name, $element_type) = (strpos($name, '_') !== FALSE) ? explode('_', $name) : [
+  protected function buildElement($name, $title, $label, $required = FALSE, array $element_options = [], array $options_options = NULL, array $role_options = NULL, array $other_options = NULL) {
+    [$element_name, $element_type] = (strpos($name, '_') !== FALSE) ? explode('_', $name) : [
       $name,
       'text',
     ];
@@ -1578,7 +1586,7 @@ class ZenformHandler extends WebformHandlerBase {
       '#other__type' => ($element_type === 'mail') ? 'webform_email_multiple' : 'textfield',
       '#other__allow_tokens' => TRUE,
       '#required' => $required,
-      '#default_value' => $this->configuration[$name],
+      '#default_value' => $this->configuration[$name] ?? '',
     ];
 
     // Set empty option.
@@ -1638,7 +1646,7 @@ class ZenformHandler extends WebformHandlerBase {
     // Get options name.
     $options_name = $element_name . '_options';
 
-    if (isset($options_options[$this->configuration[$name]]) && ($token_element_name = $this->getElementKeyFromToken($this->configuration[$name]))) {
+    if (isset($this->configuration[$name]) && isset($options_options[$this->configuration[$name]]) && ($token_element_name = $this->getElementKeyFromToken($this->configuration[$name]))) {
       // Get options name and element.
       $options_element = $this->webform->getElement($token_element_name);
 
@@ -1702,22 +1710,24 @@ class ZenformHandler extends WebformHandlerBase {
    */
   protected function buildAttachments(array $attachments) {
     $build = [];
-    foreach ($attachments as $attachment) {
-      $t_args = [
-        '@filename' => $attachment['filename'],
-        '@filemime' => $attachment['filemime'],
-        '@filesize' => format_size(mb_strlen($attachment['filecontent'])),
-      ];
-      if (!empty($attachment['_fileurl'])) {
-        $t_args[':href'] = $attachment['_fileurl'];
-        $build[] = [
-          '#markup' => $this->t('<strong><a href=":href">@filename</a></strong> (@filemime) - @filesize', $t_args),
+    if (!empty($attachments)) {
+      foreach ($attachments as $attachment) {
+        $t_args = [
+          '@filename' => $attachment['filename'],
+          '@filemime' => $attachment['filemime'],
+          '@filesize' => format_size(mb_strlen($attachment['filecontent'])),
         ];
-      }
-      else {
-        $build[] = [
-          '#markup' => $this->t('<strong>@filename</strong> (@filemime) - @filesize', $t_args),
-        ];
+        if (!empty($attachment['_fileurl'])) {
+          $t_args[':href'] = $attachment['_fileurl'];
+          $build[] = [
+            '#markup' => $this->t('<strong><a href=":href">@filename</a></strong> (@filemime) - @filesize', $t_args),
+          ];
+        }
+        else {
+          $build[] = [
+            '#markup' => $this->t('<strong>@filename</strong> (@filemime) - @filesize', $t_args),
+          ];
+        }
       }
     }
     return $build;
@@ -1746,9 +1756,41 @@ class ZenformHandler extends WebformHandlerBase {
   /**
    * {@inheritdoc}
    */
-  protected function buildTokenTreeElement(array $token_types = ['webform', 'webform_submission'], $description = NULL) {
+  protected function buildTokenTreeElement(
+    array $token_types = ['webform', 'webform_submission'],
+    $description = NULL
+  ) {
     $description = $description ?: $this->t('Use [webform_submission:values:ELEMENT_KEY:raw] to get plain text values.');
     return parent::buildTokenTreeElement($token_types, $description);
+  }
+
+  /**
+   * Build the user data that submit the ticket.
+   *
+   * @param \Drupal\webform\WebformSubmissionInterface $webform_submission
+   *   The webform submission.
+   *
+   * @return array
+   *   The user data.
+   */
+  protected function buildUserData(WebformSubmissionInterface $webform_submission) {
+    $user_data = [];
+    $sender_name = $this->configuration['sender_name'] ?? '';
+    $sender_email = $this->configuration['sender_mail'] ?? '';
+    $user_data['name'] = $this->replaceTokens($sender_name, $webform_submission, $webform_submission->getRawData());
+    $user_data['email'] = $this->replaceTokens($sender_email, $webform_submission, $webform_submission->getRawData());
+    $user_address = $webform_submission->getElementData('address');
+    if ($user_address) {
+      $user_data['user_fields']['cust_address'] = $user_address['address'];
+      if (!empty($user_address['address_2'])) {
+        $user_data['cust_address'] .= ' ' . $user_address['address_2'];
+      }
+      $user_data['user_fields']['cust_state'] = $user_address['state_province'];
+      $user_data['user_fields']['cust_city'] = $user_address['city'];
+      $user_data['user_fields']['cust_zip'] = $user_address['postal_code'];
+      $user_data['user_fields']['cust_country'] = $user_address['country'];
+    }
+    return $user_data;
   }
 
 }

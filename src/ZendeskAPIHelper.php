@@ -2,14 +2,19 @@
 
 namespace Drupal\webform_zendesk;
 
+use Drupal\Core\Messenger\MessengerInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Zendesk\API\HttpClient as ZendeskAPI;
 use Zendesk\API\Exceptions\ApiResponseException;
+use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+use Drupal\Core\StringTranslation\StringTranslationTrait;
 
 /**
  * Zendesk API Helper class.
  */
 class ZendeskAPIHelper {
+
+  use StringTranslationTrait;
 
   /**
    * The configuration object factory.
@@ -19,10 +24,26 @@ class ZendeskAPIHelper {
   protected $configFactory;
 
   /**
-   * Constuctor function.
+   * The messenger service.
+   *
+   * @var \Drupal\Core\Messenger\MessengerInterface
    */
-  public function __construct(ConfigFactoryInterface $configFactory) {
+  protected $messenger;
+
+  /**
+   * The logger service.
+   *
+   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
+   */
+  protected $logger;
+
+  /**
+   * Constructor function.
+   */
+  public function __construct(ConfigFactoryInterface $configFactory, MessengerInterface $messenger, LoggerChannelFactoryInterface $logger) {
     $this->configFactory = $configFactory;
+    $this->messenger = $messenger;
+    $this->logger = $logger;
   }
 
   /**
@@ -40,10 +61,54 @@ class ZendeskAPIHelper {
       return $client;
     }
     catch (\Exception $e) {
-      \Drupal::messenger()->addMessage(t('There was an issue connecting to zendesk API.'), 'error');
+      $this->messenger->addMessage($this->t('There was an issue connecting to zendesk API.'), 'error');
       $response = $e->getResponse();
-      \Drupal::logger('webform_zendesk')->alert($response->getBody()->getContents());
+      $this->logger->get('webform_zendesk')->alert($response->getBody()->getContents());
     }
+  }
+
+  /**
+   * Create / update the users.
+   *
+   * @param string $email
+   *   The email address of the user.
+   * @param array $user_data
+   *   The user data.
+   *
+   * @return object
+   *   The user object.
+   */
+  public function createUpdateUser($email, array $user_data = []) {
+    $client = $this->apiAuth();
+    $user = $this->findUserByEmail($email);
+    if (!empty($user)) {
+      // Update the existing user.
+      $client->users()->update($user->id, $user_data);
+    }
+    else {
+      // Create new user.
+      $user = $client->users()->create($user_data);
+    }
+    return $user;
+  }
+
+  /**
+   * Find the user by email id.
+   *
+   * @param string $email
+   *   The email id.
+   *
+   * @return object|null
+   *   Return the user object if found, null otherwise.
+   */
+  public function findUserByEmail($email) {
+    $client = $this->apiAuth();
+    $result = $client->users()->search(['query' => $email]);
+
+    if ($result->count) {
+      return $result->users[0];
+    }
+    return NULL;
   }
 
   /**
@@ -59,6 +124,10 @@ class ZendeskAPIHelper {
         $upload_token[] = $attachment_upload->upload->token;
       }
     }
+
+    // Get the user.
+    $user = $this->createUpdateUser($data['requester_email'], $data['user_data']);
+
     // Create ticket.
     try {
       $client->tickets()->create([
@@ -70,14 +139,13 @@ class ZendeskAPIHelper {
         'custom_fields' => $custom_fields_data,
         'priority' => 'normal',
         'requester' => [
-          'name' => $data['requester_name'],
-          'email' => $data['requester_email'],
+          'email' => $user->email,
         ],
       ]);
     }
     catch (ApiResponseException $e) {
-      \Drupal::messenger()->addMessage($e->getMessage(), 'error');
-      \Drupal::logger('webform_zendesk')->alert($e->getMessage());
+      $this->messenger->addMessage($e->getMessage(), 'error');
+      $this->logger->get('webform_zendesk')->alert($e->getMessage());
     }
   }
 
@@ -95,8 +163,8 @@ class ZendeskAPIHelper {
       return $attachment;
     }
     catch (ApiResponseException $e) {
-      \Drupal::messenger()->addMessage($e->getMessage(), 'error');
-      \Drupal::logger('webform_zendesk')->alert($e->getMessage());
+      $this->messenger->addMessage($e->getMessage(), 'error');
+      $this->logger->get('webform_zendesk')->alert($e->getMessage());
     }
   }
 

@@ -21,6 +21,6 @@
         }
     ],
     "require": {
-        "drupal/webform": "^1.0",
+        "drupal/webform": "^1.0"
     }
 }

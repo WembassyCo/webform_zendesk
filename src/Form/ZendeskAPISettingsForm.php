@@ -22,11 +22,10 @@ class ZendeskAPISettingsForm extends ConfigFormBase {
    */
   public function buildForm(array $form, FormStateInterface $form_state) {
     $config = $this->config('webform_zendesk_config.settings');
-
     $form['api_token'] = [
       '#type' => 'textfield',
-      '#title' => t('API token'),
-      '#description' => t('Your Zendesk API token. See <a href=":url">the Zendesk developer documentation</a> for more details.', [
+      '#title' => $this->t('API token'),
+      '#description' => $this->t('Your Zendesk API token. See <a href=":url">the Zendesk developer documentation</a> for more details.', [
         ':url' => 'https://developer.zendesk.com/rest_api/docs/support/introduction#api-token',
       ]),
       '#required' => TRUE,
@@ -34,15 +33,15 @@ class ZendeskAPISettingsForm extends ConfigFormBase {
     ];
     $form['user_name'] = [
       '#type' => 'textfield',
-      '#title' => t('Your Zendesk username'),
-      '#description' => t('The username of your Zendesk agent. Usernames are e-mails in Zendesk.'),
+      '#title' => $this->t('Your Zendesk username'),
+      '#description' => $this->t('The username of your Zendesk agent. Usernames are e-mails in Zendesk.'),
       '#required' => TRUE,
       '#default_value' => $config->get('user_name'),
     ];
     $form['subdomain'] = [
       '#type' => 'textfield',
-      '#title' => t('Zendesk subdomain'),
-      '#description' => t("Your subdomain with Zendesk. This is the first part of the url is where you access your Zendesk backend. For example for 'https://example.zendesk.com' the subdomain is 'example'."),
+      '#title' => $this->t('Zendesk subdomain'),
+      '#description' => $this->t("Your subdomain with Zendesk. This is the first part of the url is where you access your Zendesk backend. For example for 'https://example.zendesk.com' the subdomain is 'example'."),
       '#size' => 16,
       '#required' => TRUE,
       '#default_value' => $config->get('subdomain'),
