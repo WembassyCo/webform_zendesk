@@ -25,7 +25,6 @@ The installation of this module is like other Drupal modules.
 
 2. Enable the 'Webform zendesk' module in 'Extend'.
    (/admin/modules)
-   
 
 CONFIGURATION
 -------------
@@ -37,11 +36,10 @@ CONFIGURATION
 * Enable the "Create a Zendesk Issue" webform plugin".
 * The module have support for custom fields on zendesk. You need to map the custom fields from zendesk to webform fields.
 * Add this mapping in "Custom Fields Mapping" field in the plugin. The mapping must follow this pattern.
-* Lets say we have two fields Pize & Product in webform whose machine names are "size" & "product". so the mapping should be <br />
+* Lets say we have two fields Size & Product in webform whose machine names are "size" & "product". so the mapping should be <br />
   size:3600123453,<br />
   product:3600321345 <br />
   Here the numeric value is the field id on zendesk.
   
 * The select fields on webform must have same key value as it is on zendesk field.
   <br />
-
