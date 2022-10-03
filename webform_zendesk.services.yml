@@ -1,4 +1,4 @@
 services:
   webform_zendesk.api_helper:
     class: Drupal\webform_zendesk\ZendeskAPIHelper
-    arguments: ['@config.factory']
+    arguments: ['@config.factory', '@messenger', '@logger.factory']
